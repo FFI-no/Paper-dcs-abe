@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+message oabe_numattrs {
+	map<int32, bytes> attrmap = 1;
+}
+
+message oabe_ciphertext {
+
+	// When the attribute is a usual one, then 'map["attr"][0]' is the
+	// G1-element.  Otherwise, when the attr is a number (e.g. 'attr=1234'),
+	// then 'map["attr"][0]' is the number itself (encoded in bytes, big
+	// endian), and map["attr"][k] for the remaining k>1 are the
+	// G1-elements
+
+	// Includes both the attributes themselves (string),
+	// and a G1-element for each attribute.
+	map<string, oabe_numattrs> attrs = 1;
+
+	// Additional ciphertext data
+	bytes ciph1 = 2; // element of G_2, is E'  in GPSW06
+	bytes ciph2 = 3; // element of G_1, is E'' in GPSW06
+
+	// Here goes the IV, nonce, AES-GCM ciphertext, and so on
+
+	// NOTE: Protobuf doesn't seem to have fixed-width fields, which is
+	// unfortunate here as it makes for some extra overhead.
+	bytes IV = 4; // IV (96 bits)
+	bytes authtag = 5; // AES-GCM authentication tag (128 bits)
+	bytes aesciph = 6; // AES ciphertext (256 bits)
+}

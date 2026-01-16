@@ -1,0 +1,421 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..dee6ecc
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,18 @@
++*.o
++*.a
++*.so
++deps/openssl/openssl-1.1.1-dev-bp.git/
++deps/openssl/openssl-1.1.1-dev-bp.tar.gz
++deps/openssl/openssl-1.1.1-dev-bp/
++deps/root
++examples/test_cp
++examples/test_km
++examples/test_kp
++examples/test_pk
++root
++*.diff
++.vscode
++bindings/python/dist
++bindings/python/__pycache__
++bindings/python/pyopenabe.cpp
++bindings/python/pyopenabe.egg-info
+diff --git a/Makefile b/Makefile
+index ff04e35..ca5cfc8 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,5 +1,8 @@
+ .PHONY: all clean deps src cli examples bindings
+ 
++CXX11FLAGS = -Wno-overloaded-virtual -march=native
++CXXFLAGS = -Wno-overloaded-virtual -march=native
++
+ all: check-env deps src cli examples
+ 
+ check-env:
+diff --git a/Makefile.common b/Makefile.common
+index 4636296..32bd4b9 100644
+--- a/Makefile.common
++++ b/Makefile.common
+@@ -37,15 +37,19 @@ ifeq ($(OLD_GPP), 1)
+     CXX11FLAGS = -std=c++0x
+     CXXFLAGS += $(CXX11FLAGS)
+ else
+-    CXX11FLAGS = -std=c++11
++    CXX11FLAGS = -std=c++23
+     CXXFLAGS += $(CXX11FLAGS)
+ endif
+ 
++CXX11FLAGS += -Wno-overloaded-virtual -march=native
++CXXFLAGS += -Wno-overloaded-virtual -march=native
++
++
+ # Set shared lib extension for each OS
+-DEPS_PACKAGES = $(if $(USE_DEPS),$(USE_DEPS),relic openssl gtest)
++DEPS_PACKAGES = $(if $(USE_DEPS),$(USE_DEPS),openssl)
+ ADD_CFLAGS :=
+ OS_CXXFLAGS :=
+-WITH_BP := 
++WITH_BP := "with-bp"
+ 
+ ifeq ($(OS), Windows_NT)
+     RELIC_OS := WINDOWS
+@@ -85,6 +89,8 @@ else
+        CCFLAGS += -fPIC
+        OPENSSL_CONFIG = config shared
+        ADD_CFLAGS += -Wno-implicit-function-declaration
++       WITH_BP := "with-bp"
++       OPENSSL_VERSION := 1.1.1-dev-bp
+     endif
+     ifeq ($(OS_NAME), Darwin)
+        RELIC_OS = MACOSX
+diff --git a/bindings/python/pyopenabe.pyx b/bindings/python/pyopenabe.pyx
+index 1ce120a..6f81e51 100644
+--- a/bindings/python/pyopenabe.pyx
++++ b/bindings/python/pyopenabe.pyx
+@@ -42,7 +42,7 @@ cdef extern from "<openabe/openabe.h>" namespace "oabe":
+     void InitializeOpenABE() except +RuntimeError
+     void ShutdownOpenABE() except +RuntimeError
+     cdef cppclass OpenABECryptoContext:
+-        OpenABECryptoContext(string scheme_id);
++        OpenABECryptoContext(string scheme_id, bool inp);
+         void generateParams() except +RuntimeError
+         void exportPublicParams(string& mpk)
+         void exportSecretParams(string& msk)
+@@ -102,9 +102,9 @@ def to_bytes(obj):
+ # main wrapper for encryption/signature contexts
+ cdef class PyABEContext:
+     cdef OpenABECryptoContext *thisptr
+-    def __cinit__(self, scheme):
++    def __cinit__(self, scheme, base64=True):
+         cdef string scheme_id = to_bytes(scheme)
+-        self.thisptr = new OpenABECryptoContext(scheme_id)
++        self.thisptr = new OpenABECryptoContext(scheme_id, base64)
+ 
+     def __dealloc__(self):
+         del self.thisptr
+@@ -126,7 +126,7 @@ cdef class PyABEContext:
+         cdef string key = to_bytes(keyBlob)
+         return self.thisptr.importPublicParams(key)
+ 
+-    def importPublicParams(self, authID, keyBlob):
++    def importPublicParamsWithID(self, authID, keyBlob):
+         cdef string auth_id = to_bytes(authID)
+         cdef string key = to_bytes(keyBlob)
+         return self.thisptr.importPublicParams(auth_id, key)
+@@ -135,7 +135,7 @@ cdef class PyABEContext:
+         cdef string key = to_bytes(keyBlob)
+         return self.thisptr.importSecretParams(key)
+ 
+-    def importSecretParams(self, authID, keyBlob):
++    def importSecretParamsWithID(self, authID, keyBlob):
+         cdef string auth_id = to_bytes(authID)
+         cdef string key = to_bytes(keyBlob)
+         return self.thisptr.importSecretParams(auth_id, key)
+@@ -303,8 +303,8 @@ cdef class PyOpenABE:
+     def getSchemeTypes(self):
+         return ["CP-ABE", "KP-ABE"]
+ 
+-    def CreateABEContext(self, scheme):
+-        return PyABEContext(scheme)
++    def CreateABEContext(self, scheme, base64=True):
++        return PyABEContext(scheme, base64)
+ 
+     def CreatePKEContext(self):
+         return PyPKEContext()
+diff --git a/bindings/python/requirements.txt b/bindings/python/requirements.txt
+index 815126f..f362242 100644
+--- a/bindings/python/requirements.txt
++++ b/bindings/python/requirements.txt
+@@ -1,2 +1,3 @@
+ Cython>=0.23.4
+ pytest>=2.7.2
++setuptools
+diff --git a/bindings/python/setup.py b/bindings/python/setup.py
+index d2458fe..84749fc 100644
+--- a/bindings/python/setup.py
++++ b/bindings/python/setup.py
+@@ -1,5 +1,5 @@
+-from distutils.core import setup
+-from distutils.extension import Extension
++from setuptools import setup
++from setuptools import Extension
+ from Cython.Distutils import build_ext
+ import os, sys
+ 
+@@ -41,14 +41,17 @@ else:
+     sys.exit("Your '%s' platform is currently unsupported." % os_platform)
+ 
+ _extra_objects += ["-lgmp", "-lssl", "-lcrypto"]
++_extra_objects += [ZROOT_DIR + "/root/lib/libopenabe.so"]
++_extra_objects += [ZROOT_DIR + "/root/lib/libopenabe.a"]
++
+ ext_modules = [Extension("pyopenabe",
+              ["pyopenabe.pyx"],
+              language='c++',
+              extra_objects=_extra_objects,
+              include_dirs=[ZROOT_DIR + "/deps/root/include", ZROOT_DIR + "/root/include"],
+              library_dirs=[ZROOT_DIR + "/deps/root/lib", ZROOT_DIR + "/root/lib"],
+-             extra_compile_args=["-std=c++11", "-Wno-unused-function", "-DGTEST_USE_OWN_TR1_TUPLE=1",
+-                                 "-Wno-deprecated", "-pthread"] + _extra_compile_args
++             extra_compile_args=["-std=c++23", "-Wno-unused-function", "-DGTEST_USE_OWN_TR1_TUPLE=1",
++                                 "-Wno-deprecated", "-pthread", "-DBP_WITH_OPENSSL"] + _extra_compile_args
+              )]
+ 
+ setup(
+diff --git a/bindings/python/test.py b/bindings/python/test.py
+index 50e17d5..4c86038 100644
+--- a/bindings/python/test.py
++++ b/bindings/python/test.py
+@@ -41,16 +41,13 @@ assert pt1 == pt2, "Didn't recover the message!"
+ print("CP-ABE Success!")
+ 
+ 
+-pke = openabe.CreatePKEContext()
+-
+-pke.keygen("user1")
+-
+-ct1 = pke.encrypt("user1", pt1)
+-print("PKE CT: ", len(ct1))
+-
+-pt2 = pke.decrypt("user1", ct1)
+-assert pt1 == pt2, "Didn't recover the message!"
+-print("PKE Success!")
++# pke = openabe.CreatePKEContext()
++# pke.keygen("user1")
++# ct1 = pke.encrypt("user1", pt1)
++# print("PKE CT: ", len(ct1))
++# pt2 = pke.decrypt("user1", ct1)
++# assert pt1 == pt2, "Didn't recover the message!"
++# print("PKE Success!")
+ 
+ 
+ pksig = openabe.CreatePKSIGContext()
+diff --git a/cli/fuzzTest.sh b/cli/fuzzTest.sh
+index ca28757..152027d 100755
+--- a/cli/fuzzTest.sh
++++ b/cli/fuzzTest.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ # Requires 'afl-fuzz' package installed
+ 
+diff --git a/cli/runBasicTest.sh b/cli/runBasicTest.sh
+index 99d5b59..3ce048a 100755
+--- a/cli/runBasicTest.sh
++++ b/cli/runBasicTest.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ PURPLE='\033[0;95m'
+ RED='\033[0;31m'
+diff --git a/cli/runComplexTest.sh b/cli/runComplexTest.sh
+index bc9de78..eb82a88 100755
+--- a/cli/runComplexTest.sh
++++ b/cli/runComplexTest.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ PURPLE='\033[0;95m'
+ RED='\033[0;31m'
+diff --git a/cli/runTest.sh b/cli/runTest.sh
+index c2efb99..5dcb5c8 100755
+--- a/cli/runTest.sh
++++ b/cli/runTest.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ PURPLE='\033[0;95m'
+ RED='\033[0;31m'
+diff --git a/deps/Makefile b/deps/Makefile
+index a1e6afa..8956538 100644
+--- a/deps/Makefile
++++ b/deps/Makefile
+@@ -3,7 +3,7 @@ include ../Makefile.common
+ .PHONY: all clean
+ 
+ DIRS=$(DEPS_PACKAGES)
+-# relic openssl gtest
++# openssl
+ all: $(DIRS)
+ 	mkdir -p root/lib
+ 	mkdir -p root/bin
+diff --git a/deps/gtest/download_gtest.sh b/deps/gtest/download_gtest.sh
+index 6a28707..553390b 100755
+--- a/deps/gtest/download_gtest.sh
++++ b/deps/gtest/download_gtest.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ VERSION=$1
+ if [[ $VERSION = "" ]]; then
+diff --git a/deps/openssl/Makefile b/deps/openssl/Makefile
+index 56642d1..57040f1 100644
+--- a/deps/openssl/Makefile
++++ b/deps/openssl/Makefile
+@@ -6,12 +6,17 @@ include ../../Makefile.common
+ VERSION=${OPENSSL_VERSION}
+ 
+ all: package openssl-${VERSION}/.built
++#all: openssl-${VERSION}/.built
+ 
+ DEST_LIBDIR := $(DEPS_INSTALL_ZROOT)/lib
+ DEST_INCLUDEDIR := $(DEPS_INSTALL_ZROOT)/include
+ 
++# Need to replace __NR_eventfd with __NR_eventfd2 for it to compile on the
++# Raspberry Pis (ARM), but this does not seem to be needed on x86_64.
+ openssl-${VERSION}/.built: openssl-${VERSION}
+ 	cd $<; \
++	grep -rl "=> qw/glob/" ./ | xargs sed --in-place 's/=> qw\/glob\//=> qw\/:glob\//g'; \
++	grep -rl "__NR_eventfd" ./ | xargs sed -i 's/__NR_eventfd/__NR_eventfd2/g'; \
+ 	./${OPENSSL_CONFIG} --prefix=$(DEPS_INSTALL_ZROOT) && \
+ 	make && \
+ 	make install_sw && \
+diff --git a/deps/openssl/download_openssl.sh b/deps/openssl/download_openssl.sh
+index a2ce79f..34ec85e 100755
+--- a/deps/openssl/download_openssl.sh
++++ b/deps/openssl/download_openssl.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ CMD=$1
+ FORMAT=tar.gz
+diff --git a/deps/relic/download_relic.sh b/deps/relic/download_relic.sh
+index a5f5499..fd40e86 100755
+--- a/deps/relic/download_relic.sh
++++ b/deps/relic/download_relic.sh
+@@ -1,12 +1,12 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+-VERSION=0.5.0
++VERSION=0.5.0 # changing this does not change the actual relic version
+ FORMAT=tar.gz
+ LINK=https://github.com/relic-toolkit/relic
+ RELIC=${1:-relic-toolkit-${VERSION}}
+ # commit of as of 1/9/2019
+ # comment 'Update LABEL with recent changes'
+-COMMIT=b984e901ba78c83ea4093ea96addd13628c8c2d0
++COMMIT=b984e901ba78c83ea4093ea96addd13628c8c2d0 # between 0.5.0 and 0.4.0
+ 
+ echo "Clone github repo @ ${LINK}"
+ git clone ${LINK} ${RELIC}.git
+@@ -31,6 +31,11 @@ if [[ ! -f ${RELIC}.${FORMAT} ]]; then
+    grep -rl "rsa_st" ./ | xargs sed --in-place 's/rsa_st/rlc_rsa_st/g'
+    sed --in-place -e '/^#define ep2_mul /d' include/relic_label.h
+ 
++   # Extra things
++   grep -rl "RLC_ALIGNME( 64 ) typedef struct __blake2s_state" | xargs sed -i "s/RLC_ALIGNME( 64 ) typedef struct __blake2s_state/typedef struct __blake2s_state/g"
++   grep -rl "RLC_ALIGNME( 64 ) typedef struct __blake2b_state" | xargs sed -i "s/RLC_ALIGNME( 64 ) typedef struct __blake2b_state/typedef struct __blake2b_state/g"
++
++
+    cd ..
+    tar -czf ${RELIC}.${FORMAT} ${RELIC}
+    rm ${RELIC}.test.${FORMAT}
+diff --git a/deps/relic/run_install_clean.sh b/deps/relic/run_install_clean.sh
+index bf7925b..410b074 100755
+--- a/deps/relic/run_install_clean.sh
++++ b/deps/relic/run_install_clean.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/usr/bin/env bash
+ 
+ ORACLE_RELEASE=/etc/oracle-release
+ SYSTEM_RELEASE=/etc/system-release
+diff --git a/env b/env
+index c394a9c..846ed22 100755
+--- a/env
++++ b/env
+@@ -57,3 +57,4 @@ else
+    export OS_FAMILY=`uname -s | tr '[:upper:]' '[:lower:]'`
+ fi
+ 
++export ZML_LIB=with_openssl
+diff --git a/examples/Makefile b/examples/Makefile
+index 408f9f6..fac64e1 100644
+--- a/examples/Makefile
++++ b/examples/Makefile
+@@ -9,9 +9,9 @@ ifdef LOCAL_LIB_ROOT
+ LOC_LIB="-L$(LOCAL_LIB_ROOT)"
+ endif
+ 
+-CXXFLAGS = $(CXX11FLAGS) $(OS_CXXFLAGS) -pthread -Wall -g -O2 -DSSL_LIB_INIT -I${ZROOT}/deps/root/include -I${ZROOT}/root/include $(LOC_INC)
+-LDFLAGS = -L${ZROOT}/deps/root/lib -L${ZROOT}/root/lib $(LOC_LIB)
+-LIBS = -lcrypto -lrelic -lrelic_ec -lopenabe
++CXXFLAGS = $(CXX11FLAGS) $(OS_CXXFLAGS) -pthread -Wall -g -O2 -DSSL_LIB_INIT -I${ZROOT}/deps/root/include -I${ZROOT}/root/include $(LOC_INC) -DBP_WITH_OPENSSL
++LDFLAGS = -L${ZROOT}/deps/root/lib -L${ZROOT}/root/lib $(LOC_LIB) -DBP_WITH_OPENSSL
++LIBS = -lcrypto -lopenabe # -lrelic -lrelic_ec -lopenabe
+ 
+ all: test_kp test_cp test_pk test_km
+ 
+diff --git a/src/Makefile b/src/Makefile
+index 87adfc8..18fc52f 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -55,7 +55,7 @@ zml/zelement.o:
+ 	$(CC) $(CCFLAGS) -c zml/zelement.c -o zelement.o
+ 
+ zparser.o: zparser.yy
+-	$(BISON) -d -v zparser.yy
++	bison -d -v zparser.yy
+ 	cp *.hh $(OABE_INCLUDE_DIR)
+ 	$(CXX) $(CXXFLAGS) -c -o zparser.o zparser.tab.cc
+ 
+diff --git a/src/keys/zpkey.cpp b/src/keys/zpkey.cpp
+index 1985841..9bf4190 100644
+--- a/src/keys/zpkey.cpp
++++ b/src/keys/zpkey.cpp
+@@ -69,7 +69,7 @@ OpenABEPKey::OpenABEPKey(const EC_KEY *ec_key, bool isPrivate, EC_GROUP *group)
+   if (this->isPrivate) {
+     // set as the EC_KEY (private key) of the pkey
+     // no need to copy since it'll be owned by the pkey
+-    EVP_PKEY_assign_EC_KEY(this->pkey, ec_key);
++    EVP_PKEY_assign_EC_KEY(this->pkey, (EC_KEY *) ec_key);
+   } else {
+     ASSERT_NOTNULL(group);
+     // create a new EC_GROUP from the group of eckey, this
+diff --git a/src/openssl_init.cpp b/src/openssl_init.cpp
+index 6c8dbac..15822fc 100644
+--- a/src/openssl_init.cpp
++++ b/src/openssl_init.cpp
+@@ -39,6 +39,7 @@
+ #include <openssl/rand.h>
+ #include <openssl/ssl.h>
+ #include <pthread.h>
++#include <stdexcept>
+ 
+ #if defined(SSL_LIB_INIT)
+ 
+diff --git a/src/zparser.yy b/src/zparser.yy
+index bcde133..fade0b8 100644
+--- a/src/zparser.yy
++++ b/src/zparser.yy
+@@ -2,6 +2,7 @@
+ 
+ %{ /*** C/C++ Declarations ***/
+ 
++#include <stdint.h>
+ #include <stdio.h>
+ #include <string>
+ #include <vector>
+diff --git a/src/zscanner.ll b/src/zscanner.ll
+index b364566..c5d8254 100644
+--- a/src/zscanner.ll
++++ b/src/zscanner.ll
+@@ -2,6 +2,8 @@
+ 
+ %{ /*** C/C++ Declarations ***/
+ 
++#include <stdint.h>
++#include <cstdint>
+ #include <string>
+ #include <climits>
+ #include <openabe/utils/zscanner.h>
