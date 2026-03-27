@@ -25,6 +25,7 @@ message oabe_ciphertext {
 	// NOTE: Protobuf doesn't seem to have fixed-width fields, which is
 	// unfortunate here as it makes for some extra overhead.
 	bytes IV = 4; // IV (96 bits)
-	bytes authtag = 5; // AES-GCM authentication tag (128 bits)
-	bytes aesciph = 6; // AES ciphertext (256 bits)
+	bytes authtag = 5; // AES-GCM authentication tag (256 bits)
+	bytes aesciph = 6; // AES ciphertext, i.e. the AES ciphertex of the message
+					   // we want to encrypt (arbitrary size)
 }
