@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 #
 # An attempt to pack attributes relatively efficiently.
+#
+# aesciph is removed to compute overhead. Add it back to correctly pack the
+# ciphertext.
 
 import random
 from math import ceil
@@ -18,8 +21,7 @@ def pack_ciphertext(attrs, ciph1=None, ciph2=None, IV=None, authtag=None, aescip
 	message = abeprototest_pb2.oabe_ciphertext()
 
 	if IV is not None: assert(len(IV) == 12)
-	if authtag is not None: assert(len(authtag) == 16)
-	if aesciph is not None: assert(len(aesciph) == 32)
+	if authtag is not None: assert(len(authtag) == 32)
 
 	tmp = abeprototest_pb2.oabe_numattrs()
 
@@ -44,8 +46,8 @@ def pack_ciphertext(attrs, ciph1=None, ciph2=None, IV=None, authtag=None, aescip
 	message.ciph2 = get_group_elem() if ciph2 is None else ciph2
 
 	message.IV = random.randbytes(12) if IV is None else IV # 96 bits
-	message.authtag = random.randbytes(16) if authtag is None else authtag # 128 bits
-	message.aesciph = random.randbytes(32) if aesciph is None else aesciph # 256 bits
+	message.authtag = random.randbytes(32) if authtag is None else authtag # 128 bits
+	# message.aesciph = random.randbytes(32) if aesciph is None else aesciph # 256 bits
 
 	out = message.SerializeToString()
 
@@ -60,7 +62,7 @@ def unpack_ciphertext(inp: Message):
 	ciph2 = msg.ciph2
 	IV = msg.IV
 	authtag = msg.authtag
-	aesciph = msg.aesciph
+	# aesciph = msg.aesciph
 
 	attrs = {}
 	attrout = msg.attrs
@@ -77,7 +79,9 @@ def unpack_ciphertext(inp: Message):
 			attrs[k] = val.attrmap[0]
 
 	return {"attrs": attrs, "ciph1": ciph1, "ciph2": ciph2, "IV": IV,
-	        "authtag": authtag, "aesciph": aesciph}
+	        "authtag": authtag,
+	     # "aesciph": aesciph
+	     }
 
 
 def simple_test():
@@ -86,21 +90,23 @@ def simple_test():
 	# UUID-s are now no longer UUID-s proper, but random G1 elements
 	attrs = {
 		"country_code:NOR": get_group_elem(),
-		"org_FFI": get_group_elem(),
+		"org:FFI": get_group_elem(),
 		"CL":[3, [get_group_elem() for k in range(4) ]],
 		"time":[1751615435, [get_group_elem() for k in range(32) ]],
-		"uuid":get_group_elem(),
+		"uuid":[ int.from_bytes(random.randbytes(16)), [get_group_elem()] ] # store the UUID as 16 raw bytes (rounded up from 122 bits)
 	}
 
 	IV = random.randbytes(12)
-	authtag = random.randbytes(16)
-	aesciph = random.randbytes(32)
+	authtag = random.randbytes(32)
+	# aesciph = random.randbytes(32)
 
 	ciph1 = get_group_elem()
 	ciph2 = get_group_elem()
 
 	out_str = pack_ciphertext(attrs, ciph1=ciph1, ciph2=ciph2, IV=IV,
-	                          authtag=authtag, aesciph=aesciph)
+	                          authtag=authtag,
+	                          # aesciph=aesciph
+	                       )
 
 	print(f"Protobuf: {len(out_str)}")
 	print(f"Protobuf (compressed): {len(zlib.compress(out_str, wbits=-15, level=9))}")
@@ -113,7 +119,7 @@ def simple_test():
 	assert(recovered["ciph2"] == ciph2)
 	assert(recovered["IV"] == IV)
 	assert(recovered["authtag"] == authtag)
-	assert(recovered["aesciph"] == aesciph)
+	# assert(recovered["aesciph"] == aesciph)
 
 if __name__ == '__main__':
 	simple_test()
